@@ -2,32 +2,50 @@ package main
 
 import (
 	"4free.com.tw/smgp"
+	"encoding/json"
 	"flag"
-	"time"
+	"io/ioutil"
 )
 
-func main() {
-	flag.Parse()
-	conn := smgp.Connection{
-		Address: "202.102.39.166:3058",
-		// Address: "127.0.0.1:8890",
+type Config struct {
+	Server   *smgp.Server `json:"server"`
+	Remote   string       `json:"remote"`
+	ClientID string       `json:"clientID"`
+	Secret   string       `json:"secret"`
+}
+
+func (t *Config) Load(filename string) (err error) {
+	b, err := ioutil.ReadFile(filename)
+	if err != nil {
+		return
 	}
-	err := conn.Connect()
+	err = json.Unmarshal(b, t)
+	return
+}
+
+func main() {
+	conf := flag.String("conf", "config.json", "config file in JSON format")
+	flag.Parse()
+	config := new(Config)
+	err := config.Load(*conf)
+	if err != nil {
+		panic(err)
+	}
+	conn := &smgp.Connection{
+		Address: config.Remote,
+	}
+	err = conn.Connect()
 	if err != nil {
 		panic(err)
 	}
 	defer conn.Close()
-	err = conn.Login("HB_aWIFI", "HB_aWIFI")
+	err = conn.Login(config.ClientID, config.Secret)
 	if err != nil {
 		panic(err)
 	}
-	for conn.Connected() {
-		err = conn.Submit("02551744323", "13543810498", "測試啊測試",
-			smgp.DefaultSubmitOptions)
-		if err != nil {
-			panic(err)
-		}
-		time.Sleep(time.Hour)
+	err = config.Server.Serve(conn)
+	if err != nil {
+		panic(err)
 	}
 	return
 }
