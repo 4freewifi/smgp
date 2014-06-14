@@ -387,9 +387,9 @@ type SubmitOptions struct {
 }
 
 var DefaultSubmitOptions *SubmitOptions = &SubmitOptions{
-	MsgType:   MSG_TYPE_P2P,
+	MsgType:   MSG_TYPE_MT,
 	Priority:  1,
-	ServiceID: "20140520",
+	ServiceID: "PC2P",
 	FeeType:   FEE_TYPE_FREE,
 	FeeCode:   "\x00\x00\x00\x00\x00\x00",
 	FixedFee:  "\x00\x00\x00\x00\x00\x00",
