@@ -1,2 +1,2 @@
 #!/bin/sh
-exec ./test -logtostderr=true -stderrthreshold=INFO
+exec ./test -logtostderr=true -stderrthreshold=INFO -v=1

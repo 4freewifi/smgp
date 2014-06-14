@@ -275,6 +275,7 @@ func (t *Connection) Login(clientID string, secret string) (
 		return
 	}
 	ac := md5.Sum(nil)
+	glog.V(1).Infof("AuthenticatorClient 0x%x", ac)
 	_, err = body.Write(ac)
 	if err != nil {
 		return
@@ -343,18 +344,24 @@ func (t *Connection) handleLoginResp(seq uint32, buf *bytes.Buffer) (
 	if err != nil {
 		return
 	}
+	glog.V(1).Infof("Stored AuthenticatorClient 0x%x", req.AC)
 	_, err = md5.Write(req.AC)
 	if err != nil {
 		return
 	}
+	glog.V(1).Infof("Stored Secret %s", req.Secret)
 	_, err = io.WriteString(md5, req.Secret)
 	if err != nil {
 		return
 	}
 	if bytes.Compare(as, md5.Sum(nil)) != 0 {
-		glog.Error("Incorrect AuthenticatorServer")
-		//err = errors.New("Incorrect AuthenticatorServer")
-		//return
+		glog.Errorf(
+			"Incorrect AuthenticatorServer 0x%x, expected 0x%x",
+			as, md5.Sum(nil))
+		// err = fmt.Errorf(
+		// 	"Incorrect AuthenticatorServer 0x%x, expected 0x%x",
+		// 	as, md5.Sum(nil))
+		// return
 	}
 	// version
 	version, err := buf.ReadByte()
