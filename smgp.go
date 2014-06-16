@@ -317,7 +317,7 @@ func (t *Connection) handleLoginResp(seq uint32, buf *bytes.Buffer) (
 		glog.Error(err)
 		return
 	}
-	req, ok := cxt.(*loginReq)
+	_, ok := cxt.(*loginReq)
 	if !ok {
 		err = ErrorNotMatch
 		return
@@ -339,30 +339,29 @@ func (t *Connection) handleLoginResp(seq uint32, buf *bytes.Buffer) (
 	if err != nil {
 		return
 	}
-	md5 := md5.New()
-	err = binary.Write(md5, binary.BigEndian, status)
-	if err != nil {
-		return
-	}
-	glog.V(1).Infof("Stored AuthenticatorClient 0x%x", req.AC)
-	_, err = md5.Write(req.AC)
-	if err != nil {
-		return
-	}
-	glog.V(1).Infof("Stored Secret %s", req.Secret)
-	_, err = io.WriteString(md5, req.Secret)
-	if err != nil {
-		return
-	}
-	if bytes.Compare(as, md5.Sum(nil)) != 0 {
-		glog.Errorf(
-			"Incorrect AuthenticatorServer 0x%x, expected 0x%x",
-			as, md5.Sum(nil))
-		// err = fmt.Errorf(
-		// 	"Incorrect AuthenticatorServer 0x%x, expected 0x%x",
-		// 	as, md5.Sum(nil))
-		// return
-	}
+	// according to SMGP dev, there's no need to verify
+	// AuthenticatorServer.
+	// md5 := md5.New()
+	// err = binary.Write(md5, binary.BigEndian, status)
+	// if err != nil {
+	// 	return
+	// }
+	// glog.V(1).Infof("Stored AuthenticatorClient 0x%x", req.AC)
+	// _, err = md5.Write(req.AC)
+	// if err != nil {
+	// 	return
+	// }
+	// glog.V(1).Infof("Stored Secret %s", req.Secret)
+	// _, err = io.WriteString(md5, req.Secret)
+	// if err != nil {
+	// 	return
+	// }
+	// if bytes.Compare(as, md5.Sum(nil)) != 0 {
+	// 	err = fmt.Errorf(
+	// 		"Incorrect AuthenticatorServer 0x%x, expected 0x%x",
+	// 		as, md5.Sum(nil))
+	// 	return
+	// }
 	// version
 	version, err := buf.ReadByte()
 	if err != nil {
