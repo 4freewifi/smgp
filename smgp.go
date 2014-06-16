@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"time"
 )
 
 const (
@@ -51,8 +52,9 @@ type Connection struct {
 }
 
 type loginReq struct {
-	Secret string
-	AC     []byte
+	Secret  string
+	AC      []byte
+	Respond chan int
 }
 
 func (t *Connection) Connect() (err error) {
@@ -245,8 +247,9 @@ func (t *Connection) getContext(seq uint32) (v interface{}, err error) {
 	return
 }
 
-func (t *Connection) Login(clientID string, secret string) (
-	err error) {
+// timeout in millisecond
+func (t *Connection) Login(clientID string, secret string,
+	timeout time.Duration) (err error) {
 	glog.Infof("Login %s secret %s", clientID, secret)
 	// ClientID
 	b, err := octetString(clientID, 8)
@@ -303,9 +306,18 @@ func (t *Connection) Login(clientID string, secret string) (
 	if err != nil {
 		return
 	}
+	res := make(chan int)
 	t.pool[seq] = &loginReq{
-		Secret: secret,
-		AC:     ac,
+		Secret:  secret,
+		AC:      ac,
+		Respond: res,
+	}
+	// wait for respond
+	select {
+	case res <- 1:
+	case <-time.After(timeout):
+		err = errors.New("Login timed out")
+		close(res)
 	}
 	return
 }
@@ -317,11 +329,17 @@ func (t *Connection) handleLoginResp(seq uint32, buf *bytes.Buffer) (
 		glog.Error(err)
 		return
 	}
-	_, ok := cxt.(*loginReq)
+	req, ok := cxt.(*loginReq)
 	if !ok {
 		err = ErrorNotMatch
 		return
 	}
+	_, ok = <-req.Respond
+	if !ok {
+		err = errors.New("Login has timed out")
+		return
+	}
+	close(req.Respond)
 	// status
 	var status uint32
 	err = binary.Read(buf, binary.BigEndian, &status)

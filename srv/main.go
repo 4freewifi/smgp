@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"io/ioutil"
+	"time"
 )
 
 type Config struct {
@@ -39,7 +40,7 @@ func main() {
 		panic(err)
 	}
 	defer conn.Close()
-	err = conn.Login(config.ClientID, config.Secret)
+	err = conn.Login(config.ClientID, config.Secret, time.Minute)
 	if err != nil {
 		panic(err)
 	}
