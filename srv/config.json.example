@@ -1,6 +1,6 @@
 {
     "server": {
-        "addr": ":8080"
+        "addr": ":3059"
     }
     , "remote": "127.0.0.1:8890"
     , "clientID": "clientid"
