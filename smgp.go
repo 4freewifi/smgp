@@ -38,12 +38,13 @@ const (
 	FEE_TYPE_MAX           = "03"
 )
 
-var ErrorNotMatch error = errors.New("RequestID and SequenceID are not matched")
+var ErrorNotMatch error = errors.New("RequestID and SequenceID do not match")
+var ErrorNotConnected error = errors.New("Not connected")
+var ErrorServerClose error = errors.New("Closed by server")
 
 type Connection struct {
 	Address    string
 	connection net.Conn
-	connected  bool
 	sequenceID uint32
 	cSeq       chan uint32
 	readSync   chan int
@@ -58,29 +59,25 @@ type loginReq struct {
 }
 
 func (t *Connection) Connect() (err error) {
-	if t.connected {
-		return
-	}
 	t.connection, err = net.Dial("tcp", t.Address)
 	if err != nil {
 		return
 	}
-	t.connected = true
-	t.pool = make(map[uint32]interface{})
+	t.sequenceID = 0
 	t.cSeq = make(chan uint32)
 	go func() {
-		t.sequenceID = 0
+		// t.cSeq may be closed
 		defer func() {
-			close(t.cSeq)
+			recover()
 		}()
-		for t.connected {
+		for {
 			t.cSeq <- t.sequenceID
 			t.sequenceID++
 		}
 	}()
+	t.pool = make(map[uint32]interface{})
+	t.readSync = make(chan int)
 	go t.respHandler()
-	t.readSync = make(chan int, 1)
-	t.readSync <- 1
 	t.writeSync = make(chan int, 1)
 	t.writeSync <- 1
 	glog.Info("Connected")
@@ -88,22 +85,14 @@ func (t *Connection) Connect() (err error) {
 }
 
 func (t *Connection) Close() (err error) {
-	if !t.connected {
-		return
-	}
-	t.connected = false
-	_ = <-t.readSync
-	close(t.readSync)
 	_ = <-t.writeSync
 	close(t.writeSync)
-	t.pool = nil
+	close(t.cSeq)
 	err = t.connection.Close()
+	_ = <-t.readSync
+	t.pool = nil
 	glog.Info("Closed")
 	return
-}
-
-func (t *Connection) Connected() bool {
-	return t.connected
 }
 
 func (t *Connection) write(requestID uint32, body []byte, seq uint32) (
@@ -134,7 +123,11 @@ func (t *Connection) write(requestID uint32, body []byte, seq uint32) (
 
 func (t *Connection) writeRequest(requestID uint32, body []byte) (
 	seq uint32, err error) {
-	_ = <-t.writeSync
+	_, ok := <-t.writeSync
+	if !ok {
+		err = ErrorNotConnected
+		return
+	}
 	defer func() {
 		t.writeSync <- 1
 	}()
@@ -145,7 +138,11 @@ func (t *Connection) writeRequest(requestID uint32, body []byte) (
 
 func (t *Connection) writeResponse(requestID uint32, body []byte, seq uint32) (
 	err error) {
-	_ = <-t.writeSync
+	_, ok := <-t.writeSync
+	if !ok {
+		err = ErrorNotConnected
+		return
+	}
 	defer func() {
 		t.writeSync <- 1
 	}()
@@ -177,20 +174,17 @@ func (t *Connection) read() (b []byte, err error) {
 }
 
 func (t *Connection) respHandler() {
-	_ = <-t.readSync
 	defer func() {
 		t.readSync <- 1
 	}()
-	for t.connected {
+	for {
 		b, err := t.read()
 		if err != nil {
 			if err == io.EOF {
-				glog.Warning("Connection closed by server")
-				go t.Close()
-				return
+				panic(ErrorServerClose)
 			}
 			glog.Error(err)
-			continue
+			break
 		}
 		buf := bytes.NewBuffer(b)
 		var req, seq uint32
