@@ -7,14 +7,6 @@ import (
 	"net/http"
 )
 
-type Server struct {
-	Addr string `json:"addr"`
-}
-
-type SMGP struct {
-	Conn *Connection
-}
-
 type SubmitRequest struct {
 	Src string `json:"src"`
 	Dst string `json:"dst"`
@@ -24,17 +16,29 @@ type SubmitRequest struct {
 type SubmitResponse struct {
 }
 
+type Submit interface {
+	Submit(src, dst, msg string, opt *SubmitOptions) error
+}
+
+type SMGP struct {
+	smgp Submit
+}
+
 func (t *SMGP) Submit(req *SubmitRequest, res *SubmitResponse) (
 	err error) {
-	err = t.Conn.Submit(req.Src, req.Dst, req.Msg, DefaultSubmitOptions)
+	err = t.smgp.Submit(req.Src, req.Dst, req.Msg, DefaultSubmitOptions)
 	if err != nil {
 		return
 	}
 	return
 }
 
-func (t *Server) Serve(conn *Connection) (err error) {
-	smgp := &SMGP{conn}
+type Server struct {
+	Addr string `json:"addr"`
+}
+
+func (t *Server) Serve(srv Submit) (err error) {
+	smgp := &SMGP{srv}
 	s := rpc.NewServer()
 	s.RegisterCodec(json.NewCodec(), "application/json")
 	s.RegisterTCPService(smgp, "")

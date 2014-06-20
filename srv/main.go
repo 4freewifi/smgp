@@ -5,46 +5,30 @@ import (
 	"encoding/json"
 	"flag"
 	"io/ioutil"
-	"time"
 )
 
-type Config struct {
-	Server   *smgp.Server `json:"server"`
-	Remote   string       `json:"remote"`
-	ClientID string       `json:"clientID"`
-	Secret   string       `json:"secret"`
-}
-
-func (t *Config) Load(filename string) (err error) {
+func loadConfig(filename string) (conf *smgp.Config, err error) {
 	b, err := ioutil.ReadFile(filename)
 	if err != nil {
 		return
 	}
-	err = json.Unmarshal(b, t)
+	conf = new(smgp.Config)
+	err = json.Unmarshal(b, conf)
 	return
 }
 
 func main() {
 	conf := flag.String("conf", "config.json", "config file in JSON format")
 	flag.Parse()
-	config := new(Config)
-	err := config.Load(*conf)
+	config, err := loadConfig(*conf)
 	if err != nil {
 		panic(err)
 	}
-	conn := &smgp.Connection{
-		Address: config.Remote,
+	pool := &smgp.Pool{
+		Config: config,
 	}
-	err = conn.Connect()
-	if err != nil {
-		panic(err)
-	}
-	defer conn.Close()
-	err = conn.Login(config.ClientID, config.Secret, time.Minute)
-	if err != nil {
-		panic(err)
-	}
-	err = config.Server.Serve(conn)
+	pool.Start(5)
+	err = config.Server.Serve(pool)
 	if err != nil {
 		panic(err)
 	}

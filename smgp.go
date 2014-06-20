@@ -42,12 +42,11 @@ const (
 )
 
 var ErrorNotMatch error = errors.New("RequestID and SequenceID do not match")
-var ErrorNotConnected error = errors.New("Not connected")
-var ErrorServerClose error = errors.New("Closed by server")
+var ErrorNoConnection error = errors.New("No connection")
 var ErrorServerTimeout error = errors.New("Server timeout")
 
 type Connection struct {
-	Address     string
+	comm        chan<- error
 	activeTimer *time.Timer
 	activeRetry int
 	activeSync  chan int
@@ -65,32 +64,36 @@ type loginReq struct {
 	Sync   chan int
 }
 
-func (t *Connection) Connect() (err error) {
-	t.connection, err = net.Dial("tcp", t.Address)
+func NewConnection(address string, comm chan<- error) (
+	conn *Connection, err error) {
+	connection, err := net.Dial("tcp", address)
 	if err != nil {
 		return
 	}
-	t.activeRetry = 0
-	t.activeSync = make(chan int, 1)
-	t.activeSync <- 1
-	t.activeTimer = time.AfterFunc(ACTIVE_INTERVAL, t.keepActive)
-	t.sequenceID = 0
-	t.cSeq = make(chan uint32)
+	conn = new(Connection)
+	conn.connection = connection
+	conn.comm = comm
+	conn.activeRetry = 0
+	conn.activeSync = make(chan int, 1)
+	conn.activeSync <- 1
+	conn.activeTimer = time.AfterFunc(ACTIVE_INTERVAL, conn.keepActive)
+	conn.sequenceID = 0
+	conn.cSeq = make(chan uint32)
 	go func() {
-		// t.cSeq may be closed
+		// conn.cSeq may be closed
 		defer func() {
 			recover()
 		}()
 		for {
-			t.cSeq <- t.sequenceID
-			t.sequenceID++
+			conn.cSeq <- conn.sequenceID
+			conn.sequenceID++
 		}
 	}()
-	t.pool = make(map[uint32]interface{})
-	t.readSync = make(chan int)
-	go t.respHandler()
-	t.writeSync = make(chan int, 1)
-	t.writeSync <- 1
+	conn.pool = make(map[uint32]interface{})
+	conn.readSync = make(chan int, 1)
+	go conn.respHandler()
+	conn.writeSync = make(chan int, 1)
+	conn.writeSync <- 1
 	glog.Info("Connected")
 	return
 }
@@ -136,6 +139,11 @@ func (t *Connection) write(requestID uint32, body []byte, seq uint32) (
 	}
 	n, err := t.connection.Write(buf.Bytes())
 	if err != nil {
+		cerr, ok := err.(net.Error)
+		if ok && cerr.Temporary() {
+			return
+		}
+		t.comm <- err
 		return
 	}
 	glog.V(1).Infof("Wrote %d bytes: %x", n, buf.Bytes()[4:buf.Len()])
@@ -146,7 +154,7 @@ func (t *Connection) writeRequest(requestID uint32, body []byte) (
 	seq uint32, err error) {
 	_, ok := <-t.writeSync
 	if !ok {
-		err = ErrorNotConnected
+		err = ErrorNoConnection
 		return
 	}
 	defer func() {
@@ -161,7 +169,7 @@ func (t *Connection) writeResponse(requestID uint32, body []byte, seq uint32) (
 	err error) {
 	_, ok := <-t.writeSync
 	if !ok {
-		err = ErrorNotConnected
+		err = ErrorNoConnection
 		return
 	}
 	defer func() {
@@ -175,6 +183,11 @@ func (t *Connection) read() (b []byte, err error) {
 	b = make([]byte, 4)
 	_, err = t.connection.Read(b)
 	if err != nil {
+		cerr, ok := err.(net.Error)
+		if ok && cerr.Temporary() {
+			return
+		}
+		t.comm <- err
 		return
 	}
 	buf := bytes.NewBuffer(b)
@@ -201,11 +214,8 @@ func (t *Connection) respHandler() {
 	for {
 		b, err := t.read()
 		if err != nil {
-			if err == io.EOF {
-				panic(ErrorServerClose)
-			}
 			glog.Error(err)
-			break
+			return
 		}
 		t.resetActive()
 		buf := bytes.NewBuffer(b)
@@ -604,7 +614,8 @@ func (t *Connection) keepActive() {
 		t.activeSync <- 1
 	}()
 	if t.activeRetry >= ACTIVE_RETRY {
-		panic(ErrorServerTimeout)
+		t.comm <- ErrorServerTimeout
+		return
 	}
 	t.activeTest()
 	t.activeRetry++
