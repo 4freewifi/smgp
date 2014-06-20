@@ -46,15 +46,15 @@ type Connection struct {
 	connected  bool
 	sequenceID uint32
 	cSeq       chan uint32
-	reader     chan int
-	writer     chan int
+	readSync   chan int
+	writeSync  chan int
 	pool       map[uint32]interface{}
 }
 
 type loginReq struct {
-	Secret  string
-	AC      []byte
-	Respond chan int
+	Secret string
+	AC     []byte
+	Sync   chan int
 }
 
 func (t *Connection) Connect() (err error) {
@@ -79,10 +79,10 @@ func (t *Connection) Connect() (err error) {
 		}
 	}()
 	go t.respHandler()
-	t.reader = make(chan int, 1)
-	t.reader <- 1
-	t.writer = make(chan int, 1)
-	t.writer <- 1
+	t.readSync = make(chan int, 1)
+	t.readSync <- 1
+	t.writeSync = make(chan int, 1)
+	t.writeSync <- 1
 	glog.Info("Connected")
 	return
 }
@@ -92,10 +92,10 @@ func (t *Connection) Close() (err error) {
 		return
 	}
 	t.connected = false
-	_ = <-t.reader
-	close(t.reader)
-	_ = <-t.writer
-	close(t.writer)
+	_ = <-t.readSync
+	close(t.readSync)
+	_ = <-t.writeSync
+	close(t.writeSync)
 	t.pool = nil
 	err = t.connection.Close()
 	glog.Info("Close")
@@ -108,9 +108,9 @@ func (t *Connection) Connected() bool {
 
 func (t *Connection) write(requestID uint32, body []byte) (
 	seq uint32, err error) {
-	_ = <-t.writer
+	_ = <-t.writeSync
 	defer func() {
-		t.writer <- 1
+		t.writeSync <- 1
 	}()
 	seq = <-t.cSeq
 	data := []interface{}{
@@ -139,9 +139,9 @@ func (t *Connection) write(requestID uint32, body []byte) (
 
 func (t *Connection) writeResp(requestID uint32, body []byte, seq uint32) (
 	err error) {
-	_ = <-t.writer
+	_ = <-t.writeSync
 	defer func() {
-		t.writer <- 1
+		t.writeSync <- 1
 	}()
 	data := []interface{}{
 		uint32(len(body) + 12),
@@ -191,9 +191,9 @@ func (t *Connection) read() (b []byte, err error) {
 }
 
 func (t *Connection) respHandler() {
-	_ = <-t.reader
+	_ = <-t.readSync
 	defer func() {
-		t.reader <- 1
+		t.readSync <- 1
 	}()
 	for t.connected {
 		b, err := t.read()
@@ -220,11 +220,11 @@ func (t *Connection) respHandler() {
 		}
 		switch req {
 		case REQID_LOGIN_RESP:
-			err = t.handleLoginResp(seq, buf)
+			err = t.loginResp(seq, buf)
 		case REQID_SUBMIT_RESP:
-			err = t.handleSubmitResp(seq, buf)
+			err = t.submitResp(seq, buf)
 		case REQID_ACTIVE_TEST:
-			err = t.handleActiveTest(seq, buf)
+			err = t.activeTestResp(seq, buf)
 		case REQID_ACTIVE_TEST_RESP:
 			// does nothing
 		default:
@@ -306,23 +306,23 @@ func (t *Connection) Login(clientID string, secret string,
 	if err != nil {
 		return
 	}
-	res := make(chan int)
+	c := make(chan int)
 	t.pool[seq] = &loginReq{
-		Secret:  secret,
-		AC:      ac,
-		Respond: res,
+		Secret: secret,
+		AC:     ac,
+		Sync:   c,
 	}
 	// wait for respond
 	select {
-	case res <- 1:
+	case c <- 1:
 	case <-time.After(timeout):
 		err = errors.New("Login timed out")
-		close(res)
+		close(c)
 	}
 	return
 }
 
-func (t *Connection) handleLoginResp(seq uint32, buf *bytes.Buffer) (
+func (t *Connection) loginResp(seq uint32, buf *bytes.Buffer) (
 	err error) {
 	cxt, err := t.getContext(seq)
 	if err != nil {
@@ -334,12 +334,12 @@ func (t *Connection) handleLoginResp(seq uint32, buf *bytes.Buffer) (
 		err = ErrorNotMatch
 		return
 	}
-	_, ok = <-req.Respond
+	_, ok = <-req.Sync
 	if !ok {
 		err = errors.New("Login has timed out")
 		return
 	}
-	close(req.Respond)
+	close(req.Sync)
 	// status
 	var status uint32
 	err = binary.Read(buf, binary.BigEndian, &status)
@@ -553,7 +553,7 @@ func (t *Connection) Submit(src, dst, msg string, opt *SubmitOptions) (
 	return
 }
 
-func (t *Connection) handleSubmitResp(seq uint32, buf *bytes.Buffer) (
+func (t *Connection) submitResp(seq uint32, buf *bytes.Buffer) (
 	err error) {
 	_, err = t.getContext(seq)
 	if err != nil {
@@ -580,7 +580,7 @@ func (t *Connection) handleSubmitResp(seq uint32, buf *bytes.Buffer) (
 	return
 }
 
-func (t *Connection) handleActiveTest(seq uint32, buf *bytes.Buffer) (
+func (t *Connection) activeTestResp(seq uint32, buf *bytes.Buffer) (
 	err error) {
 	glog.Info("Send Active_Test_Resp")
 	err = t.writeResp(REQID_ACTIVE_TEST_RESP, []byte{}, seq)
