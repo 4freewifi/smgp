@@ -36,20 +36,27 @@ const (
 	FEE_TYPE_ONE           = "01"
 	FEE_TYPE_MONTH         = "02"
 	FEE_TYPE_MAX           = "03"
+	ACTIVE_INTERVAL        = 3 * time.Minute
+	ACTIVE_TIMEOUT         = time.Minute
+	ACTIVE_RETRY           = 3
 )
 
 var ErrorNotMatch error = errors.New("RequestID and SequenceID do not match")
 var ErrorNotConnected error = errors.New("Not connected")
 var ErrorServerClose error = errors.New("Closed by server")
+var ErrorServerTimeout error = errors.New("Server timeout")
 
 type Connection struct {
-	Address    string
-	connection net.Conn
-	sequenceID uint32
-	cSeq       chan uint32
-	readSync   chan int
-	writeSync  chan int
-	pool       map[uint32]interface{}
+	Address     string
+	activeTimer *time.Timer
+	activeRetry int
+	activeSync  chan int
+	connection  net.Conn
+	sequenceID  uint32
+	cSeq        chan uint32
+	readSync    chan int
+	writeSync   chan int
+	pool        map[uint32]interface{}
 }
 
 type loginReq struct {
@@ -63,6 +70,10 @@ func (t *Connection) Connect() (err error) {
 	if err != nil {
 		return
 	}
+	t.activeRetry = 0
+	t.activeSync = make(chan int, 1)
+	t.activeSync <- 1
+	t.activeTimer = time.AfterFunc(ACTIVE_INTERVAL, t.keepActive)
 	t.sequenceID = 0
 	t.cSeq = make(chan uint32)
 	go func() {
@@ -85,8 +96,18 @@ func (t *Connection) Connect() (err error) {
 }
 
 func (t *Connection) Close() (err error) {
-	_ = <-t.writeSync
-	close(t.writeSync)
+	for _, c := range []*chan int{
+		&t.activeSync,
+		&t.writeSync,
+	} {
+		_ = <-*c
+		close(*c)
+		*c = nil
+	}
+	if t.activeTimer != nil {
+		t.activeTimer.Stop()
+		t.activeTimer = nil
+	}
 	close(t.cSeq)
 	err = t.connection.Close()
 	_ = <-t.readSync
@@ -186,6 +207,7 @@ func (t *Connection) respHandler() {
 			glog.Error(err)
 			break
 		}
+		t.resetActive()
 		buf := bytes.NewBuffer(b)
 		var req, seq uint32
 		err = binary.Read(buf, binary.BigEndian, &req)
@@ -560,8 +582,46 @@ func (t *Connection) submitResp(seq uint32, buf *bytes.Buffer) (
 	return
 }
 
+func (t *Connection) activeTest() (err error) {
+	glog.V(1).Info("Send Active Test")
+	_, err = t.writeRequest(REQID_ACTIVE_TEST, []byte{})
+	return
+}
+
 func (t *Connection) activeTestResp(seq uint32, buf *bytes.Buffer) (
 	err error) {
+	glog.V(1).Info("Send Active Test Resp")
 	err = t.writeResponse(REQID_ACTIVE_TEST_RESP, []byte{}, seq)
+	return
+}
+
+func (t *Connection) keepActive() {
+	_, ok := <-t.activeSync
+	if !ok {
+		return
+	}
+	defer func() {
+		t.activeSync <- 1
+	}()
+	if t.activeRetry >= ACTIVE_RETRY {
+		panic(ErrorServerTimeout)
+	}
+	t.activeTest()
+	t.activeRetry++
+	t.activeTimer = time.AfterFunc(ACTIVE_TIMEOUT, t.keepActive)
+	return
+}
+
+func (t *Connection) resetActive() {
+	_, ok := <-t.activeSync
+	if !ok {
+		return
+	}
+	defer func() {
+		t.activeSync <- 1
+	}()
+	t.activeRetry = 0
+	t.activeTimer.Stop()
+	t.activeTimer = time.AfterFunc(ACTIVE_INTERVAL, t.keepActive)
 	return
 }
