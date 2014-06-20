@@ -106,43 +106,8 @@ func (t *Connection) Connected() bool {
 	return t.connected
 }
 
-func (t *Connection) write(requestID uint32, body []byte) (
-	seq uint32, err error) {
-	_ = <-t.writeSync
-	defer func() {
-		t.writeSync <- 1
-	}()
-	seq = <-t.cSeq
-	data := []interface{}{
-		uint32(len(body) + 12),
-		requestID,
-		seq,
-	}
-	buf := new(bytes.Buffer)
-	for _, v := range data {
-		err = binary.Write(buf, binary.BigEndian, v)
-		if err != nil {
-			return
-		}
-	}
-	_, err = buf.Write(body)
-	if err != nil {
-		return
-	}
-	n, err := t.connection.Write(buf.Bytes())
-	if err != nil {
-		return
-	}
-	glog.Infof("Wrote %d bytes: %x", n, buf.Bytes()[4:buf.Len()])
-	return
-}
-
-func (t *Connection) writeResp(requestID uint32, body []byte, seq uint32) (
+func (t *Connection) write(requestID uint32, body []byte, seq uint32) (
 	err error) {
-	_ = <-t.writeSync
-	defer func() {
-		t.writeSync <- 1
-	}()
 	data := []interface{}{
 		uint32(len(body) + 12),
 		requestID,
@@ -164,6 +129,27 @@ func (t *Connection) writeResp(requestID uint32, body []byte, seq uint32) (
 		return
 	}
 	glog.Infof("Resp Wrote %d bytes: %x", n, buf.Bytes()[4:buf.Len()])
+	return
+}
+
+func (t *Connection) writeRequest(requestID uint32, body []byte) (
+	seq uint32, err error) {
+	_ = <-t.writeSync
+	defer func() {
+		t.writeSync <- 1
+	}()
+	seq = <-t.cSeq
+	err = t.write(requestID, body, seq)
+	return
+}
+
+func (t *Connection) writeResponse(requestID uint32, body []byte, seq uint32) (
+	err error) {
+	_ = <-t.writeSync
+	defer func() {
+		t.writeSync <- 1
+	}()
+	err = t.write(requestID, body, seq)
 	return
 }
 
@@ -247,7 +233,7 @@ func (t *Connection) getContext(seq uint32) (v interface{}, err error) {
 	return
 }
 
-// timeout in millisecond
+// Login is synchronized. Set timeout in millisecond.
 func (t *Connection) Login(clientID string, secret string,
 	timeout time.Duration) (err error) {
 	glog.Infof("Login %s secret %s", clientID, secret)
@@ -302,7 +288,7 @@ func (t *Connection) Login(clientID string, secret string,
 	if err != nil {
 		return
 	}
-	seq, err := t.write(REQID_LOGIN, body.Bytes())
+	seq, err := t.writeRequest(REQID_LOGIN, body.Bytes())
 	if err != nil {
 		return
 	}
@@ -545,7 +531,7 @@ func (t *Connection) Submit(src, dst, msg string, opt *SubmitOptions) (
 	if err != nil {
 		return
 	}
-	seq, err := t.write(REQID_SUBMIT, body.Bytes())
+	seq, err := t.writeRequest(REQID_SUBMIT, body.Bytes())
 	if err != nil {
 		return
 	}
@@ -583,6 +569,6 @@ func (t *Connection) submitResp(seq uint32, buf *bytes.Buffer) (
 func (t *Connection) activeTestResp(seq uint32, buf *bytes.Buffer) (
 	err error) {
 	glog.Info("Send Active_Test_Resp")
-	err = t.writeResp(REQID_ACTIVE_TEST_RESP, []byte{}, seq)
+	err = t.writeResponse(REQID_ACTIVE_TEST_RESP, []byte{}, seq)
 	return
 }
