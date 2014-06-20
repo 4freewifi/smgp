@@ -98,7 +98,7 @@ func (t *Connection) Close() (err error) {
 	close(t.writeSync)
 	t.pool = nil
 	err = t.connection.Close()
-	glog.Info("Close")
+	glog.Info("Closed")
 	return
 }
 
@@ -128,7 +128,7 @@ func (t *Connection) write(requestID uint32, body []byte, seq uint32) (
 	if err != nil {
 		return
 	}
-	glog.Infof("Resp Wrote %d bytes: %x", n, buf.Bytes()[4:buf.Len()])
+	glog.V(1).Infof("Wrote %d bytes: %x", n, buf.Bytes()[4:buf.Len()])
 	return
 }
 
@@ -172,7 +172,7 @@ func (t *Connection) read() (b []byte, err error) {
 		err = errors.New("Unexpected EOF")
 		return
 	}
-	glog.Infof("Read %d bytes: %x", l, b)
+	glog.V(1).Infof("Read %d bytes: %x", l, b)
 	return
 }
 
@@ -414,7 +414,7 @@ func (t *Connection) Submit(src, dst, msg string, opt *SubmitOptions) (
 	}
 	// Priority
 	if !(opt.Priority >= 0 && opt.Priority <= 3) {
-		glog.Infof("Incorrect priority %d, set to 1, normal.",
+		glog.Warningf("Incorrect priority %d, set to 1, normal.",
 			opt.Priority)
 		opt.Priority = 1
 	}
@@ -536,6 +536,7 @@ func (t *Connection) Submit(src, dst, msg string, opt *SubmitOptions) (
 		return
 	}
 	t.pool[seq] = nil
+	glog.Infof("Submit seq %d %s -> %s: %s", seq, src, dst, msg)
 	return
 }
 
@@ -552,7 +553,6 @@ func (t *Connection) submitResp(seq uint32, buf *bytes.Buffer) (
 	if err != nil {
 		return
 	}
-	glog.Infof("MsgID 0x%x", msgID)
 	// status
 	var status uint32
 	err = binary.Read(buf, binary.BigEndian, &status)
@@ -562,13 +562,12 @@ func (t *Connection) submitResp(seq uint32, buf *bytes.Buffer) (
 	if status != STATUS_OK {
 		err = fmt.Errorf("Status = %d", status)
 	}
-	glog.Info("Submitted successfully")
+	glog.Infof("Submit seq %d MsgID 0x%x", seq, msgID)
 	return
 }
 
 func (t *Connection) activeTestResp(seq uint32, buf *bytes.Buffer) (
 	err error) {
-	glog.Info("Send Active_Test_Resp")
 	err = t.writeResponse(REQID_ACTIVE_TEST_RESP, []byte{}, seq)
 	return
 }
