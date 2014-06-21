@@ -25,3 +25,9 @@ Expected response:
     "id": 1
 }
 ```
+
+# ToDo
+
+1. Submit failure retry
+2. No response retry
+3. Sliding windows
