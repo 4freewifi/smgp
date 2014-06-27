@@ -586,7 +586,7 @@ func (t *Connection) submitResp(seq uint32, buf *bytes.Buffer) (
 		return
 	}
 	if status != STATUS_OK {
-		err = fmt.Errorf("Status = %d", status)
+		err = fmt.Errorf("Submit seq %d failed, status = %d", seq, status)
 	}
 	glog.Infof("Submit seq %d MsgID 0x%x", seq, msgID)
 	return
