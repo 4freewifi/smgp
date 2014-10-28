@@ -44,19 +44,21 @@ func (t *Pool) Submit(src, dst, msg string, opt *SubmitOptions) (
 	defer func() {
 		t.rwmutex.RUnlock()
 	}()
-	n := len(t.pool)
-	if n == 0 {
+	poolsize := len(t.pool)
+	if poolsize == 0 {
 		err = ErrorNoConnection
 		return
 	}
-	n = rand.Intn(n)
-	i := 0
+	i, n := 0, rand.Intn(poolsize)
 	for c, _ := range t.pool {
 		if i == n {
 			err = c.Submit(src, dst, msg, opt)
 			break
 		}
 		i++
+	}
+	if i >= poolsize {
+		glog.Fatalf("Unexpected. poolsize %d n %d i %d", poolsize, n, i)
 	}
 	return
 }
@@ -104,11 +106,12 @@ func (t *Pool) keeper(id int, stop <-chan int) {
 			conn.Close()
 		}
 	Next:
-		glog.Errorf("#%d: %s", id, err)
+		glog.Errorf("#%d: %v", id, err)
 		select {
 		case <-stop:
 			return
 		case <-time.After(10 * time.Second):
+			glog.Info("Wait 10 seconds...")
 		}
 	}
 }

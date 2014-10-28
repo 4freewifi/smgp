@@ -141,6 +141,7 @@ func (t *Connection) write(requestID uint32, body []byte, seq uint32) (
 	if err != nil {
 		cerr, ok := err.(net.Error)
 		if ok && cerr.Temporary() {
+			glog.Warningf("net.Error: %v", cerr)
 			return
 		}
 		t.comm <- err
@@ -185,6 +186,7 @@ func (t *Connection) read() (b []byte, err error) {
 	if err != nil {
 		cerr, ok := err.(net.Error)
 		if ok && cerr.Temporary() {
+			glog.Warningf("net.Error: %v", cerr)
 			return
 		}
 		t.comm <- err

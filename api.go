@@ -24,13 +24,8 @@ type SMGP struct {
 	smgp Submit
 }
 
-func (t *SMGP) Submit(req *SubmitRequest, res *SubmitResponse) (
-	err error) {
-	err = t.smgp.Submit(req.Src, req.Dst, req.Msg, DefaultSubmitOptions)
-	if err != nil {
-		return
-	}
-	return
+func (t *SMGP) Submit(req *SubmitRequest, res *SubmitResponse) error {
+	return t.smgp.Submit(req.Src, req.Dst, req.Msg, DefaultSubmitOptions)
 }
 
 type Server struct {
@@ -43,7 +38,8 @@ func (t *Server) Serve(srv Submit) (err error) {
 	s.RegisterCodec(json.NewCodec(), "application/json")
 	s.RegisterTCPService(smgp, "")
 	if !s.HasMethod("SMGP.Submit") {
-		return
+		glog.Fatal("Cannot find required JSON-RPC method: SMGP.Submit")
+		return // should not reach here
 	}
 	http.Handle("/json-rpc", s)
 	glog.Infof("ListenAndServe %s", t.Addr)
