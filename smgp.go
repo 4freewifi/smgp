@@ -119,6 +119,16 @@ func (t *Connection) Close() (err error) {
 	return
 }
 
+func (t *Connection) ioerror(err error) {
+	neterr, ok := err.(net.Error)
+	if ok && neterr.Temporary() {
+		glog.Warningf("net.Error: %v", neterr)
+		return
+	}
+	t.comm <- err
+	return
+}
+
 func (t *Connection) write(requestID uint32, body []byte, seq uint32) (
 	err error) {
 	data := []interface{}{
@@ -139,12 +149,7 @@ func (t *Connection) write(requestID uint32, body []byte, seq uint32) (
 	}
 	n, err := t.connection.Write(buf.Bytes())
 	if err != nil {
-		cerr, ok := err.(net.Error)
-		if ok && cerr.Temporary() {
-			glog.Warningf("net.Error: %v", cerr)
-			return
-		}
-		t.comm <- err
+		t.ioerror(err)
 		return
 	}
 	glog.V(1).Infof("Wrote %d bytes: %x", n, buf.Bytes()[4:buf.Len()])
@@ -181,18 +186,13 @@ func (t *Connection) writeResponse(requestID uint32, body []byte, seq uint32) (
 }
 
 func (t *Connection) read() (b []byte, err error) {
-	b = make([]byte, 4)
-	_, err = t.connection.Read(b)
+	head := make([]byte, 4)
+	_, err = t.connection.Read(head)
 	if err != nil {
-		cerr, ok := err.(net.Error)
-		if ok && cerr.Temporary() {
-			glog.Warningf("net.Error: %v", cerr)
-			return
-		}
-		t.comm <- err
+		t.ioerror(err)
 		return
 	}
-	buf := bytes.NewBuffer(b)
+	buf := bytes.NewBuffer(head)
 	var l uint32
 	err = binary.Read(buf, binary.BigEndian, &l)
 	if err != nil {
@@ -201,6 +201,10 @@ func (t *Connection) read() (b []byte, err error) {
 	l -= 4 // already read 4 bytes
 	b = make([]byte, l)
 	n, err := t.connection.Read(b)
+	if err != nil {
+		t.ioerror(err)
+		return
+	}
 	if uint32(n) != l {
 		err = errors.New("Unexpected EOF")
 		return

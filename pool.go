@@ -83,6 +83,7 @@ func (t *Pool) keeper(id int, stop <-chan int) {
 	comm := make(chan error)
 	defer func() {
 		close(comm)
+		glog.Infof("#%d: Stopped", id)
 	}()
 	for {
 		glog.Infof("#%d: Connecting...", id)
@@ -99,6 +100,7 @@ func (t *Pool) keeper(id int, stop <-chan int) {
 		t.add(conn)
 		select {
 		case <-stop:
+			glog.Infof("#%d: Closing...", id)
 			conn.Close()
 			return
 		case err = <-comm:
@@ -111,7 +113,7 @@ func (t *Pool) keeper(id int, stop <-chan int) {
 		case <-stop:
 			return
 		case <-time.After(10 * time.Second):
-			glog.Info("Wait 10 seconds...")
+			glog.Info("Try reconnecting every 10 secs")
 		}
 	}
 }
