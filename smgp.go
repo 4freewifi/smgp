@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -46,16 +47,16 @@ var ErrorNoConnection error = errors.New("No connection")
 var ErrorServerTimeout error = errors.New("Server timeout")
 
 type Connection struct {
-	comm        chan<- error
 	activeTimer *time.Timer
 	activeRetry int
-	activeSync  chan int
 	connection  net.Conn
 	sequenceID  uint32
 	cSeq        chan uint32
-	readSync    chan int
-	writeSync   chan int
+	activeMutex sync.Mutex
+	closeOnce   sync.Once
 	pool        map[uint32]interface{}
+	Closed      chan int
+	closing     bool
 }
 
 type loginReq struct {
@@ -64,58 +65,44 @@ type loginReq struct {
 	Sync   chan int
 }
 
-func NewConnection(address string, comm chan<- error) (
-	conn *Connection, err error) {
+func NewConnection(address string) (c *Connection, err error) {
 	connection, err := net.Dial("tcp", address)
 	if err != nil {
 		return
 	}
-	conn = new(Connection)
-	conn.connection = connection
-	conn.comm = comm
-	conn.activeRetry = 0
-	conn.activeSync = make(chan int, 1)
-	conn.activeSync <- 1
-	conn.activeTimer = time.AfterFunc(ACTIVE_INTERVAL, conn.keepActive)
-	conn.sequenceID = 0
-	conn.cSeq = make(chan uint32)
+	c = new(Connection)
+	c.connection = connection
+	c.cSeq = make(chan uint32)
 	go func() {
-		// conn.cSeq may be closed
 		defer func() {
 			recover()
 		}()
 		for {
-			conn.cSeq <- conn.sequenceID
-			conn.sequenceID++
+			// runtime panic if cSeq is closed
+			c.cSeq <- c.sequenceID
+			c.sequenceID++
 		}
 	}()
-	conn.pool = make(map[uint32]interface{})
-	conn.readSync = make(chan int, 1)
-	go conn.respHandler()
-	conn.writeSync = make(chan int, 1)
-	conn.writeSync <- 1
+	c.pool = make(map[uint32]interface{})
+	go c.respHandler()
+	c.activeTimer = time.AfterFunc(ACTIVE_INTERVAL, c.keepActive)
+	c.Closed = make(chan int)
 	glog.Info("Connected")
 	return
 }
 
 func (t *Connection) Close() (err error) {
-	for _, c := range []*chan int{
-		&t.activeSync,
-		&t.writeSync,
-	} {
-		_ = <-*c
-		close(*c)
-		*c = nil
-	}
-	if t.activeTimer != nil {
+	t.closeOnce.Do(func() {
+		t.closing = true
+		err = t.connection.Close()
+		t.activeMutex.Lock()
+		defer t.activeMutex.Unlock()
 		t.activeTimer.Stop()
-		t.activeTimer = nil
-	}
-	close(t.cSeq)
-	err = t.connection.Close()
-	_ = <-t.readSync
-	t.pool = nil
-	glog.Info("Closed")
+		close(t.cSeq)
+		t.Closed <- 1
+		glog.Info("Closed")
+		return
+	})
 	return
 }
 
@@ -125,7 +112,8 @@ func (t *Connection) ioerror(err error) {
 		glog.Warningf("net.Error: %v", neterr)
 		return
 	}
-	t.comm <- err
+	// unrecoverable
+	t.Close()
 	return
 }
 
@@ -158,14 +146,6 @@ func (t *Connection) write(requestID uint32, body []byte, seq uint32) (
 
 func (t *Connection) writeRequest(requestID uint32, body []byte) (
 	seq uint32, err error) {
-	_, ok := <-t.writeSync
-	if !ok {
-		err = ErrorNoConnection
-		return
-	}
-	defer func() {
-		t.writeSync <- 1
-	}()
 	seq = <-t.cSeq
 	err = t.write(requestID, body, seq)
 	return
@@ -173,14 +153,6 @@ func (t *Connection) writeRequest(requestID uint32, body []byte) (
 
 func (t *Connection) writeResponse(requestID uint32, body []byte, seq uint32) (
 	err error) {
-	_, ok := <-t.writeSync
-	if !ok {
-		err = ErrorNoConnection
-		return
-	}
-	defer func() {
-		t.writeSync <- 1
-	}()
 	err = t.write(requestID, body, seq)
 	return
 }
@@ -214,27 +186,22 @@ func (t *Connection) read() (b []byte, err error) {
 }
 
 func (t *Connection) respHandler() {
-	defer func() {
-		t.readSync <- 1
-	}()
-	for {
+	for !t.closing {
+		var req, seq uint32
+		var buf *bytes.Buffer
 		b, err := t.read()
 		if err != nil {
-			glog.Error(err)
-			return
+			goto Error
 		}
 		t.resetActive()
-		buf := bytes.NewBuffer(b)
-		var req, seq uint32
+		buf = bytes.NewBuffer(b)
 		err = binary.Read(buf, binary.BigEndian, &req)
 		if err != nil {
-			glog.Error(err)
-			continue
+			goto Error
 		}
 		err = binary.Read(buf, binary.BigEndian, &seq)
 		if err != nil {
-			glog.Error(err)
-			continue
+			goto Error
 		}
 		switch req {
 		case REQID_LOGIN_RESP:
@@ -249,8 +216,11 @@ func (t *Connection) respHandler() {
 			err = fmt.Errorf("Unsupported RequestID: %d", req)
 		}
 		if err != nil {
-			glog.Error(err)
+			goto Error
 		}
+		continue
+	Error:
+		glog.Error(err)
 	}
 	return
 }
@@ -612,15 +582,12 @@ func (t *Connection) activeTestResp(seq uint32, buf *bytes.Buffer) (
 }
 
 func (t *Connection) keepActive() {
-	_, ok := <-t.activeSync
-	if !ok {
-		return
-	}
-	defer func() {
-		t.activeSync <- 1
-	}()
+	t.activeMutex.Lock()
+	defer t.activeMutex.Unlock()
 	if t.activeRetry >= ACTIVE_RETRY {
-		t.comm <- ErrorServerTimeout
+		glog.Error(ErrorServerTimeout)
+		// prevent deadlock
+		go t.Close()
 		return
 	}
 	t.activeTest()
@@ -630,13 +597,8 @@ func (t *Connection) keepActive() {
 }
 
 func (t *Connection) resetActive() {
-	_, ok := <-t.activeSync
-	if !ok {
-		return
-	}
-	defer func() {
-		t.activeSync <- 1
-	}()
+	t.activeMutex.Lock()
+	defer t.activeMutex.Unlock()
 	t.activeRetry = 0
 	t.activeTimer.Stop()
 	t.activeTimer = time.AfterFunc(ACTIVE_INTERVAL, t.keepActive)

@@ -41,9 +41,7 @@ func (t *Pool) Stop() {
 func (t *Pool) Submit(src, dst, msg string, opt *SubmitOptions) (
 	err error) {
 	t.rwmutex.RLock()
-	defer func() {
-		t.rwmutex.RUnlock()
-	}()
+	defer t.rwmutex.RUnlock()
 	poolsize := len(t.pool)
 	if poolsize == 0 {
 		err = ErrorNoConnection
@@ -65,47 +63,38 @@ func (t *Pool) Submit(src, dst, msg string, opt *SubmitOptions) (
 
 func (t *Pool) add(conn *Connection) {
 	t.rwmutex.Lock()
-	defer func() {
-		t.rwmutex.Unlock()
-	}()
+	defer t.rwmutex.Unlock()
 	t.pool[conn] = nil
 }
 
 func (t *Pool) remove(conn *Connection) {
 	t.rwmutex.Lock()
-	defer func() {
-		t.rwmutex.Unlock()
-	}()
+	defer t.rwmutex.Unlock()
 	delete(t.pool, conn)
 }
 
 func (t *Pool) keeper(id int, stop <-chan int) {
-	comm := make(chan error)
-	defer func() {
-		close(comm)
-		glog.Infof("#%d: Stopped", id)
-	}()
+	defer glog.Infof("#%d: Stopped", id)
 	for {
 		glog.Infof("#%d: Connecting...", id)
-		conn, err := NewConnection(t.Config.Remote, comm)
+		c, err := NewConnection(t.Config.Remote)
 		if err != nil {
 			goto Next
 		}
-		err = conn.Login(t.Config.ClientID, t.Config.Secret,
+		err = c.Login(t.Config.ClientID, t.Config.Secret,
 			5*time.Second)
 		if err != nil {
-			conn.Close()
+			c.Close()
 			goto Next
 		}
-		t.add(conn)
+		t.add(c)
 		select {
 		case <-stop:
 			glog.Infof("#%d: Closing...", id)
-			conn.Close()
+			c.Close()
 			return
-		case err = <-comm:
-			t.remove(conn)
-			conn.Close()
+		case <-c.Closed:
+			t.remove(c)
 		}
 	Next:
 		glog.Errorf("#%d: %v", id, err)
